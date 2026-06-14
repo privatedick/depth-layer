@@ -1,0 +1,16 @@
+{
+  "name": "Default Descent",
+  "maxDepth": -10,
+  "durationSec": 120,
+  "unlockPrice": 2.99,
+  "layers": [
+    { "index": 7, "type": "shepard", "params": { "centerFreq": 400, "voices": 4, "glideRate": 0.5 } },
+    { "index": 6, "type": "noise", "params": { "color": "pink", "bandpassFreq": 2000, "bandpassQ": 1 } },
+    { "index": 5, "type": "noise", "params": { "color": "brown", "bandpassFreq": 800, "bandpassQ": 0.5 } },
+    { "index": 4, "type": "heartbeat", "params": { "freq": 72, "resonance": 0.5 } },
+    { "index": 3, "type": "breath", "params": { "cycleSec": 6, "depth": 0.5, "tone": 0 } },
+    { "index": 2, "type": "speech", "params": { "text": "wall", "rate": 0.8, "pitch": 0.6, "repeat": true } },
+    { "index": 1, "type": "silence", "params": {} },
+    { "index": 0, "type": "silence", "params": {} }
+  ]
+}

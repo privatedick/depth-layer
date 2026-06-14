@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Depth Layer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; overscroll-behavior: none; }
+
+        #scene {
+            width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            color: #fff;
+            font-family: 'Georgia', 'Times New Roman', serif;
+            position: relative;
+        }
+
+        #depthLine {
+            position: absolute; left: 16px; top: 10%; width: 2px; height: 80%;
+            background: #111; border-radius: 1px; transition: opacity 1s ease;
+        }
+        #depthFill {
+            position: absolute; top: 0; left: 0; width: 100%;
+            background: #fff; border-radius: 1px; height: 0%;
+            transition: height 0.3s ease;
+        }
+        #depthDot {
+            position: absolute; left: -3px; width: 8px; height: 8px;
+            background: #fff; border-radius: 50%; top: 0%;
+            transition: top 0.3s ease;
+            box-shadow: 0 0 12px 2px rgba(255,255,255,0.3);
+        }
+
+        #startScreen {
+            text-align: center; opacity: 1; transition: opacity 1.5s ease;
+            cursor: pointer;
+        }
+        #startScreen.hidden { opacity: 0; pointer-events: none; }
+        #startScreen h1 {
+            font-size: 1.4rem; font-weight: normal;
+            letter-spacing: 0.3em; text-transform: lowercase;
+            color: #555; margin-bottom: 40px;
+        }
+        #startScreen .hint {
+            font-size: 0.85rem; color: #333;
+            animation: pulse 3s ease-in-out infinite;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
+
+        #activeScreen { display: none; width: 100%; height: 100%; cursor: ns-resize; }
+
+        #flash {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: #fff; opacity: 0; pointer-events: none;
+            transition: opacity 0.08s ease;
+        }
+        #flash.on { opacity: 0.02; }
+
+        #unlockPrompt {
+            position: absolute; bottom: 15%; left: 50%; transform: translateX(-50%);
+            text-align: center; opacity: 0; transition: opacity 1s ease; pointer-events: none;
+        }
+        #unlockPrompt.visible { opacity: 1; pointer-events: auto; }
+        #unlockPrompt p { font-size: 0.8rem; color: #444; margin-bottom: 16px; font-style: italic; }
+        #unlockPrompt button {
+            background: transparent; border: 1px solid #333; color: #333;
+            padding: 10px 28px; border-radius: 30px; font-family: inherit;
+            font-size: 0.8rem; cursor: pointer; transition: all 0.3s ease;
+        }
+        #unlockPrompt button:hover { border-color: #666; color: #666; }
+
+        #reading {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: none; flex-direction: column; align-items: center;
+            justify-content: center; padding: 40px;
+        }
+        #reading.active { display: flex; }
+        .reading-line {
+            opacity: 0; animation: fadeIn 2.5s forwards;
+            margin: 14px 0; font-size: 1.15rem; line-height: 1.7;
+            color: #888; text-align: center; max-width: 400px;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .reading-label {
+            font-size: 0.6rem; color: #222; letter-spacing: 0.4em;
+            text-transform: uppercase; margin-bottom: 32px;
+        }
+        #replayBtn, #shareBtn {
+            margin-top: 16px; background: transparent; border: 1px solid #222;
+            color: #333; padding: 8px 24px; border-radius: 20px;
+            font-family: inherit; font-size: 0.7rem; cursor: pointer;
+        }
+        #replayBtn { opacity: 0; animation: fadeIn 2s 8s forwards; }
+        #shareBtn { opacity: 0; animation: fadeIn 2s 9s forwards; display: inline-block; }
+    </style>
+</head>
+<body>
+<div id="scene">
+    <div id="depthLine"><div id="depthFill"></div><div id="depthDot"></div></div>
+    <div id="flash"></div>
+
+    <div id="startScreen">
+        <h1>depth layer</h1>
+        <div class="hint">drag down to descend</div>
+    </div>
+
+    <div id="activeScreen"></div>
+
+    <div id="unlockPrompt">
+        <p>the wall continues below</p>
+        <button id="unlockBtn">descend further · $2.99</button>
+    </div>
+
+    <div id="reading">
+        <div class="reading-label">the wall remembers</div>
+        <div id="readingLines"></div>
+        <button id="replayBtn">again</button>
+        <button id="shareBtn">share</button>
+    </div>
+</div>
+
+<script type="module">
+import { DepthAudio } from './engine/audio.js';
+import { BehaviorTracker } from './engine/behavior.js';
+import { InputHandler } from './engine/input.js';
+import { validateExperience } from './engine/schema.js';
+
+const DEFAULT_CONFIG_URL = './experiences/default.json';
+
+const $ = id => document.getElementById(id);
+
+class DepthPlayer {
+    constructor(exp) {
+        this.exp = exp;
+        this.maxLayer = Math.max(...exp.layers.map(l => l.index));
+        this.audio = new DepthAudio();
+        this.behavior = new BehaviorTracker(this.maxLayer);
+        this.input = null;
+        this.active = false;
+        this.ended = false;
+        this.currentLayer = this.maxLayer;
+        this.totalDrag = 0;
+        this.negativeUnlocked = false;
+        this.unlockShown = false;
+        this.timerInterval = null;
+        this.remaining = exp.durationSec || 0;
+        this._startFired = false;
+
+        try { this.negativeUnlocked = localStorage.getItem('depth_negative_unlocked') === 'true'; } catch(e) {}
+        this.bindStart();
+    }
+
+    bindStart() {
+        const fire = (e) => {
+            e.preventDefault();
+            if (this._startFired) return;
+            this._startFired = true;
+            this.start();
+        };
+        $('startScreen').addEventListener('mousedown', fire);
+        $('startScreen').addEventListener('touchstart', fire, { passive: false });
+    }
+
+    async start() {
+        $('startScreen').classList.add('hidden');
+        $('activeScreen').style.display = 'block';
+        $('unlockPrompt').classList.remove('visible');
+
+        await this.audio.init();
+        this.active = true;
+        this.ended = false;
+        this.currentLayer = this.maxLayer;
+        this.totalDrag = 0;
+        this.unlockShown = false;
+        this._startFired = true;
+
+        this.behavior = new BehaviorTracker(this.maxLayer);
+        this.behavior.start();
+
+        // Input handler
+        this.input = new InputHandler(
+            $('activeScreen'),
+            (dy) => this.onDrag(dy),
+            () => { this.audio.activity(); this.behavior.activity(); }
+        );
+        this.input.start();
+
+        this.updateDepthVisual(0);
+        if (this.remaining > 0) this.startTimer();
+    }
+
+    onDrag(dy) {
+        const pixelsPerLayer = 80;
+        this.totalDrag += dy;
+
+        const rawLayer = this.maxLayer - (this.totalDrag / pixelsPerLayer);
+        let newLayer = Math.min(this.maxLayer, Math.max(this.exp.maxDepth, rawLayer));
+        if (newLayer < 0 && !this.negativeUnlocked) newLayer = 0;
+
+        const progress = (this.maxLayer - newLayer) / (this.maxLayer - this.exp.maxDepth);
+        this.updateDepthVisual(Math.max(0, Math.min(1, progress)));
+
+        if (Math.abs(newLayer - this.currentLayer) > 0.01) {
+            this.behavior.recordTransition(this.currentLayer, newLayer);
+            this.currentLayer = newLayer;
+
+            // Crossfade audio
+            this.audio.crossfade(this.currentLayer, this.exp.layers);
+
+            // Flash
+            $('flash').classList.add('on');
+            setTimeout(() => $('flash').classList.remove('on'), 80);
+
+            // Haptic
+            if (navigator.vibrate) try { navigator.vibrate(25); } catch(e) {}
+
+            // Unlock prompt
+            const layerInt = Math.floor(newLayer);
+            if (layerInt <= 0 && !this.negativeUnlocked && !this.unlockShown) {
+                this.unlockShown = true;
+                $('unlockPrompt').classList.add('visible');
+            }
+            if (layerInt > 0) {
+                this.unlockShown = false;
+                $('unlockPrompt').classList.remove('visible');
+            }
+        }
+    }
+
+    updateDepthVisual(progress) {
+        $('depthFill').style.height = (progress * 100) + '%';
+        $('depthDot').style.top = (progress * 100) + '%';
+    }
+
+    startTimer() {
+        if (this.timerInterval) clearInterval(this.timerInterval);
+        this.remaining = this.exp.durationSec;
+        this.timerInterval = setInterval(() => {
+            if (!this.active) return;
+            this.remaining--;
+            if (this.remaining <= 0) this.end();
+        }, 1000);
+    }
+
+    end() {
+        if (this.ended) return;
+        this.ended = true;
+        this.active = false;
+
+        this.behavior.stop();
+        if (this.timerInterval) clearInterval(this.timerInterval);
+        if (this.input) this.input.stop();
+        this.audio.stopAll();
+
+        $('unlockPrompt').classList.remove('visible');
+        $('depthLine').style.opacity = '0';
+
+        const signals = this.behavior.getSignals();
+        this.showReading(signals);
+    }
+
+    async showReading(signals) {
+        // Try LLM first, fall back to template
+        const { generateReadingAsync } = await import('./engine/reading.js');
+        const lines = await generateReadingAsync(signals, this.exp.layers, {
+            llmEndpoint: window.__DEPTH_LAYER_LLM_ENDPOINT || null,
+            apiKey: window.__DEPTH_LAYER_API_KEY || null,
+        });
+        this.renderReading(lines);
+    }
+
+    renderReading(lines) {
+        $('activeScreen').style.display = 'none';
+        const container = $('readingLines');
+        container.innerHTML = '';
+        lines.forEach((line, i) => {
+            const p = document.createElement('p');
+            p.className = 'reading-line';
+            p.style.animationDelay = `${(i + 1) * 2}s`;
+            p.textContent = line;
+            container.appendChild(p);
+        });
+        $('reading').classList.add('active');
+    }
+}
+
+// --- Bootstrap ---
+async function loadExperience() {
+    // Check URL params for experience config
+    const params = new URLSearchParams(window.location.search);
+    const configB64 = params.get('config');
+    if (configB64) {
+        try {
+            const json = atob(configB64);
+            const exp = JSON.parse(json);
+            const validation = validateExperience(exp);
+            if (validation.valid) return exp;
+            console.warn('Invalid experience config:', validation.errors);
+        } catch(e) {
+            console.warn('Failed to parse config param:', e);
+        }
+    }
+
+    // Fallback to default
+    try {
+        const resp = await fetch(DEFAULT_CONFIG_URL);
+        return await resp.json();
+    } catch(e) {
+        // Hardcoded fallback
+        return {
+            name: "Default Descent", maxDepth: -10, durationSec: 120, unlockPrice: 2.99,
+            layers: [
+                { index: 7, type: "silence", params: {} },
+                { index: 0, type: "silence", params: {} }
+            ]
+        };
+    }
+}
+
+// Unlock
+$('unlockBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const price = player?.exp?.unlockPrice || 2.99;
+    if (confirm(`Unlock deeper layers for $${price}? (simulated)`)) {
+        player.negativeUnlocked = true;
+        try { localStorage.setItem('depth_negative_unlocked', 'true'); } catch(e) {}
+        $('unlockPrompt').classList.remove('visible');
+    }
+});
+
+// Replay
+$('replayBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('reading').classList.remove('active');
+    $('depthLine').style.opacity = '1';
+    $('startScreen').classList.remove('hidden');
+    init();
+});
+
+// Share
+$('shareBtn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const lines = [...document.querySelectorAll('.reading-line')].map(el => el.textContent).join('\n');
+    if (navigator.share) {
+        try { await navigator.share({ title: 'Depth Layer', text: lines }); } catch(e) {}
+    } else {
+        try { await navigator.clipboard.writeText(lines); } catch(e) {}
+    }
+});
+
+let player;
+async function init() {
+    const exp = await loadExperience();
+    player = new DepthPlayer(exp);
+}
+init();
+</script>
+</body>
+</html>
