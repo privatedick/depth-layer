@@ -34,7 +34,6 @@ export class InputHandler {
             this.mode = 'drag';
             dragging = true;
             startY = e.clientY;
-            startTotal = 0;
             e.preventDefault();
         };
         const onMouseMove = (e) => {
